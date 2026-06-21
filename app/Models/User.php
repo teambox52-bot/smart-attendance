@@ -6,7 +6,6 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Support\Facades\File;
 
 class User extends Authenticatable
 {
@@ -47,9 +46,7 @@ class User extends Authenticatable
             return null;
         }
 
-        return File::exists(public_path($this->face_image_path))
-            ? url($this->face_image_path)
-            : null;
+        return url($this->face_image_path);
     }
 
     // الطالب مسجل في مواد
