@@ -10,6 +10,7 @@ use App\Services\FacePlusPlusService;
 use App\Models\AttendanceRecord;
 use App\Models\Enrollment;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 
 class FaceController extends Controller
@@ -102,7 +103,12 @@ class FaceController extends Controller
             'student_id' => $student->id,
         ]);
 
+        if ($student->face_image_path) {
+            $this->deleteStoredFaceImage($student->face_image_path);
+        }
+
         $student->face_token = null;
+        $student->face_image_path = null;
         $student->save();
     }
 
@@ -139,6 +145,39 @@ class FaceController extends Controller
     private function faceUploadMimeType($file): string
     {
         return $file->getMimeType() ?: $file->getClientMimeType() ?: 'image/jpeg';
+    }
+
+    private function deleteStoredFaceImage(?string $path): void
+    {
+        if (!$path || !str_starts_with($path, 'face-images/')) {
+            return;
+        }
+
+        File::delete(public_path($path));
+    }
+
+    private function storeFaceProfileImage(User $user, $file): string
+    {
+        $directory = public_path('face-images');
+        File::ensureDirectoryExists($directory);
+
+        $extension = strtolower($file->extension() ?: $file->guessExtension() ?: 'jpg');
+        if (!in_array($extension, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+            $extension = 'jpg';
+        }
+
+        $filename = sprintf(
+            'student-%s-%s-%s.%s',
+            $user->id,
+            now()->format('YmdHis'),
+            bin2hex(random_bytes(4)),
+            $extension
+        );
+
+        $this->deleteStoredFaceImage($user->face_image_path);
+        $file->move($directory, $filename);
+
+        return 'face-images/' . $filename;
     }
 
     public function register(Request $request, FacePlusPlusService $faceService)
@@ -221,11 +260,13 @@ class FaceController extends Controller
         }
 
         $user->face_token = $detectJson['faces'][0]['face_token'];
+        $user->face_image_path = $this->storeFaceProfileImage($user, $file);
         $user->save();
 
         return response()->json([
             'message' => 'Face registered successfully',
-            'face_token' => $user->face_token
+            'face_token' => $user->face_token,
+            'face_image_url' => $user->face_image_url,
         ]);
     }
 

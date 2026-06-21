@@ -260,6 +260,7 @@ class AuthController extends Controller
             'major' => $user->major,
             'level' => $user->level,
             'face_enrolled' => !empty($user->face_token),
+            'face_image_url' => $user->face_image_url,
         ];
     }
 

@@ -6,6 +6,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Support\Facades\File;
 
 class User extends Authenticatable
 {
@@ -19,7 +20,12 @@ class User extends Authenticatable
         'university_code',
         'major',
         'level',
-        'face_token'
+        'face_token',
+        'face_image_path'
+    ];
+
+    protected $appends = [
+        'face_image_url',
     ];
 
     protected $hidden = [
@@ -33,6 +39,17 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    public function getFaceImageUrlAttribute(): ?string
+    {
+        if (!$this->face_image_path) {
+            return null;
+        }
+
+        return File::exists(public_path($this->face_image_path))
+            ? url($this->face_image_path)
+            : null;
     }
 
     // الطالب مسجل في مواد
