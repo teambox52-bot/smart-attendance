@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Api;
 
+use App\Exports\CourseReportExport;
+use App\Exports\SessionReportExport;
 use App\Models\AttendanceRecord;
 use App\Models\AttendanceSession;
 use App\Models\Course;
@@ -135,6 +137,55 @@ class Phase3GroupedSessionTest extends TestCase
             ->assertJsonPath('students.0.course_code', 'AQ-CS4')
             ->assertJsonPath('students.0.session_id', $sessions[3]->id)
             ->assertJsonPath('students.0.status', 'present');
+    }
+
+    public function test_grouped_course_export_uses_simple_roster_format(): void
+    {
+        [, $courses] = $this->groupedCourses();
+        $student = $this->student([
+            'name' => 'Ahmed Mohamed',
+            'level' => '2',
+            'university_code' => '210568',
+        ]);
+        Enrollment::create(['user_id' => $student->id, 'course_id' => $courses[1]->id]);
+        $this->sessionsFor($courses[0]->doctor, $courses);
+
+        $rows = (new CourseReportExport($courses[0]->id))->array();
+
+        $this->assertSame(['Course Name', 'aq'], $rows[0]);
+        $this->assertSame(['Course Code', 'AQ'], $rows[1]);
+        $this->assertSame(['Total sessions', 4], $rows[2]);
+        $this->assertSame(['University Code', 'Full Name'], $rows[4]);
+        $this->assertSame(['210568', 'Ahmed Mohamed'], $rows[5]);
+    }
+
+    public function test_grouped_session_export_uses_simple_roster_format(): void
+    {
+        [$doctor, $courses] = $this->groupedCourses();
+        $sessions = $this->sessionsFor($doctor, $courses);
+        $student = $this->student([
+            'name' => 'Ziadd Tarek',
+            'level' => '4',
+            'university_code' => '211373',
+        ]);
+        Enrollment::create(['user_id' => $student->id, 'course_id' => $courses[3]->id]);
+        AttendanceRecord::create([
+            'user_id' => $student->id,
+            'attendance_session_id' => $sessions[3]->id,
+            'method' => 'qr',
+            'status' => 'present',
+        ]);
+
+        $rows = (new SessionReportExport($sessions[0]->id))->array();
+
+        $this->assertSame(['Course Name', 'aq'], $rows[0]);
+        $this->assertSame(['Course Code', 'AQ'], $rows[1]);
+        $this->assertSame(['Session ID', $sessions->pluck('id')->join(', ')], $rows[2]);
+        $this->assertSame(['Status', 'scheduled'], $rows[3]);
+        $this->assertSame(['Open Date', '2026-03-31 10:00'], $rows[4]);
+        $this->assertSame(['Close Date', '2026-03-31 11:30'], $rows[5]);
+        $this->assertSame(['University Code', 'Full Name', 'Status'], $rows[7]);
+        $this->assertSame(['211373', 'Ziadd Tarek', 'Present'], $rows[8]);
     }
 
     private function groupedCourses(): array

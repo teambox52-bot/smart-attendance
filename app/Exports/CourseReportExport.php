@@ -4,7 +4,6 @@ namespace App\Exports;
 
 use App\Models\Course;
 use App\Models\Enrollment;
-use App\Models\AttendanceRecord;
 use Maatwebsite\Excel\Concerns\FromArray;
 
 class CourseReportExport implements FromArray
@@ -18,58 +17,64 @@ class CourseReportExport implements FromArray
 
     public function array(): array
     {
-        $rows = [];
-
         $course = Course::find($this->courseId);
 
-        $rows[] = ['Course Name', $course->name];
-        $rows[] = ['Course Code', $course->code];
-        $rows[] = ['Semester', $course->semester];
-        $rows[] = [];
+        if (!$course) {
+            return [];
+        }
 
-        $rows[] = [
-            'University code',
-            'Full name',
-            'Status'
-        ];
+        $courses = $this->logicalCourseRows($course);
+        $courseIds = $courses->pluck('id');
+        $sessionIds = $courses->flatMap(fn (Course $item) => $item->sessions()->pluck('id'));
 
         $students = Enrollment::with('user')
-            ->where('course_id', $this->courseId)
-            ->get();
+            ->whereIn('course_id', $courseIds)
+            ->get()
+            ->unique('user_id')
+            ->sortBy(fn ($enrollment) => $enrollment->user?->university_code ?? '')
+            ->values();
 
-        $presentStudents = [];
-        $absentStudents = [];
+        $rows = [
+            ['Course Name', $course->name],
+            ['Course Code', $this->displayCourseCode($course->code)],
+            ['Total sessions', $sessionIds->count()],
+            [],
+            ['University Code', 'Full Name'],
+        ];
 
         foreach ($students as $enrollment) {
             $student = $enrollment->user;
 
-            $present = AttendanceRecord::where('user_id', $student->id)
-                ->whereHas('session', function ($q) {
-                    $q->where('course_id', $this->courseId);
-                })
-                ->exists();
+            if (!$student) {
+                continue;
+            }
 
-            $studentRow = [
+            $rows[] = [
                 $student->university_code,
                 $student->name,
-                $present ? 'Present' : 'Absent'
             ];
-
-            if ($present) {
-                $presentStudents[] = $studentRow;
-            } else {
-                $absentStudents[] = $studentRow;
-            }
-        }
-
-        foreach ($presentStudents as $student) {
-            $rows[] = $student;
-        }
-
-        foreach ($absentStudents as $student) {
-            $rows[] = $student;
         }
 
         return $rows;
+    }
+
+    private function logicalCourseRows(Course $course)
+    {
+        $baseCode = $this->displayCourseCode($course->code);
+
+        return Course::with('sessions')
+            ->where('doctor_id', $course->doctor_id)
+            ->where('name', $course->name)
+            ->where(function ($query) use ($baseCode) {
+                $query->where('code', $baseCode)
+                    ->orWhere('code', 'like', "{$baseCode}-%");
+            })
+            ->orderBy('id')
+            ->get();
+    }
+
+    private function displayCourseCode(string $code): string
+    {
+        return preg_replace('/-(CS|IS)[1-4](?:-\d+)?$/i', '', $code) ?: $code;
     }
 }
