@@ -139,6 +139,39 @@ class Phase3GroupedSessionTest extends TestCase
             ->assertJsonPath('students.0.status', 'present');
     }
 
+    public function test_reports_overview_counts_grouped_session_as_one_logical_session(): void
+    {
+        [$doctor, $courses] = $this->groupedCourses();
+        $sessions = $this->sessionsFor($doctor, $courses, ['status' => 'closed']);
+        $student = $this->student([
+            'level' => '3',
+            'university_code' => '211373',
+        ]);
+        Enrollment::create(['user_id' => $student->id, 'course_id' => $courses[2]->id]);
+        AttendanceRecord::create([
+            'user_id' => $student->id,
+            'attendance_session_id' => $sessions[2]->id,
+            'method' => 'qr',
+            'status' => 'present',
+        ]);
+
+        Sanctum::actingAs($doctor);
+
+        $this->getJson('/api/reports/overview')
+            ->assertOk()
+            ->assertJsonPath('totals.average_attendance_rate', 100)
+            ->assertJsonPath('totals.courses_count', 1)
+            ->assertJsonPath('totals.sessions_count', 1)
+            ->assertJsonPath('totals.students_count', 1)
+            ->assertJsonPath('courses.0.code', 'AQ')
+            ->assertJsonPath('courses.0.total_students', 1)
+            ->assertJsonPath('courses.0.sessions_count', 1)
+            ->assertJsonPath('courses.0.attendance_rate', 100)
+            ->assertJsonPath('sessions.0.course_code', 'AQ')
+            ->assertJsonPath('sessions.0.present_count', 1)
+            ->assertJsonPath('sessions.0.total_count', 1);
+    }
+
     public function test_grouped_course_export_uses_simple_roster_format(): void
     {
         [, $courses] = $this->groupedCourses();
