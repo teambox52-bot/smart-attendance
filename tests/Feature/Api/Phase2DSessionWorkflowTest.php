@@ -25,8 +25,8 @@ class Phase2DSessionWorkflowTest extends TestCase
         $response = $this->postJson('/api/sessions', [
             'course_id' => $course->id,
             'method' => 'both',
-            'starts_at' => '2026-05-31T10:00:00Z',
-            'ends_at' => '2026-05-31T11:30:00Z',
+            'starts_at' => $this->futureStart(),
+            'ends_at' => $this->futureEnd(),
         ]);
 
         $response->assertCreated()
@@ -58,7 +58,7 @@ class Phase2DSessionWorkflowTest extends TestCase
             'course_id' => $course->id,
             'method' => 'qr',
             'starts_at' => 'not-a-date',
-            'ends_at' => '2026-05-31T11:30:00Z',
+            'ends_at' => $this->futureEnd(),
         ])
             ->assertStatus(422)
             ->assertJsonPath('message', 'Please enter a valid session date and time.');
@@ -76,11 +76,30 @@ class Phase2DSessionWorkflowTest extends TestCase
         $this->postJson('/api/sessions', [
             'course_id' => $course->id,
             'method' => 'qr',
-            'starts_at' => '2026-05-31T11:30:00Z',
-            'ends_at' => '2026-05-31T10:00:00Z',
+            'starts_at' => $this->futureEnd(),
+            'ends_at' => $this->futureStart(),
         ])
             ->assertStatus(422)
             ->assertJsonPath('message', 'Please enter a valid session date and time.');
+
+        $this->assertSame(0, AttendanceSession::count());
+    }
+
+    public function test_create_session_rejects_past_start_time(): void
+    {
+        $doctor = $this->doctor();
+        $course = $this->courseFor($doctor);
+
+        Sanctum::actingAs($doctor);
+
+        $this->postJson('/api/sessions', [
+            'course_id' => $course->id,
+            'method' => 'qr',
+            'starts_at' => now()->subDay()->toIso8601String(),
+            'ends_at' => now()->subDay()->addHour()->toIso8601String(),
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Please choose a valid future session date and time.');
 
         $this->assertSame(0, AttendanceSession::count());
     }
@@ -173,8 +192,8 @@ class Phase2DSessionWorkflowTest extends TestCase
 
         $response = $this->patchJson("/api/sessions/{$session->id}", [
             'method' => 'qr',
-            'starts_at' => '2026-05-31T12:00:00Z',
-            'ends_at' => '2026-05-31T13:00:00Z',
+            'starts_at' => now()->addDays(2)->setTime(12, 0)->toIso8601String(),
+            'ends_at' => now()->addDays(2)->setTime(13, 0)->toIso8601String(),
         ]);
 
         $response->assertOk()
@@ -186,6 +205,23 @@ class Phase2DSessionWorkflowTest extends TestCase
             'id' => $session->id,
             'method' => 'qr',
         ]);
+    }
+
+    public function test_doctor_cannot_update_scheduled_session_to_past_start_time(): void
+    {
+        $doctor = $this->doctor();
+        $course = $this->courseFor($doctor);
+        $session = $this->sessionFor($course, $doctor, ['status' => 'scheduled']);
+
+        Sanctum::actingAs($doctor);
+
+        $this->patchJson("/api/sessions/{$session->id}", [
+            'method' => 'qr',
+            'starts_at' => now()->subDay()->toIso8601String(),
+            'ends_at' => now()->subDay()->addHour()->toIso8601String(),
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Please choose a valid future session date and time.');
     }
 
     public function test_doctor_cannot_update_open_session(): void
@@ -283,17 +319,17 @@ class Phase2DSessionWorkflowTest extends TestCase
         $response = $this->postJson('/api/sessions', [
             'course_id' => $course->id,
             'method' => 'qr',
-            'starts_at' => '2026-06-03T09:18:00Z',
-            'ends_at' => '2026-06-03T22:22:00Z',
+            'starts_at' => '2030-06-03T09:18:00Z',
+            'ends_at' => '2030-06-03T22:22:00Z',
         ]);
 
         $response->assertCreated()
             ->assertJsonPath('session.status', 'scheduled')
             ->assertJsonPath('session.is_open', false);
 
-        $this->assertSame('2026-06-03T09:18:00', $response->json('session.starts_at'));
-        $this->assertSame('2026-06-03T22:22:00', $response->json('session.ends_at'));
-        $this->assertSame('2026-06-03', $response->json('session.display_date'));
+        $this->assertSame('2030-06-03T09:18:00', $response->json('session.starts_at'));
+        $this->assertSame('2030-06-03T22:22:00', $response->json('session.ends_at'));
+        $this->assertSame('2030-06-03', $response->json('session.display_date'));
         $this->assertSame('09:18', $response->json('session.display_start_time'));
         $this->assertSame('22:22', $response->json('session.display_end_time'));
     }
@@ -308,18 +344,18 @@ class Phase2DSessionWorkflowTest extends TestCase
         $response = $this->postJson('/api/sessions', [
             'course_id' => $course->id,
             'method' => 'qr',
-            'starts_at' => '2026-06-06T10:00:00+03:00',
-            'ends_at' => '2026-06-06T11:30:00+03:00',
+            'starts_at' => '2030-06-06T10:00:00+03:00',
+            'ends_at' => '2030-06-06T11:30:00+03:00',
         ]);
 
         $response->assertCreated()
-            ->assertJsonPath('session.starts_at', '2026-06-06T10:00:00')
-            ->assertJsonPath('session.ends_at', '2026-06-06T11:30:00')
-            ->assertJsonPath('session.display_date', '2026-06-06')
+            ->assertJsonPath('session.starts_at', '2030-06-06T10:00:00')
+            ->assertJsonPath('session.ends_at', '2030-06-06T11:30:00')
+            ->assertJsonPath('session.display_date', '2030-06-06')
             ->assertJsonPath('session.display_start_time', '10:00')
             ->assertJsonPath('session.display_end_time', '11:30')
             ->assertJsonMissingExact([
-                'starts_at' => '2026-06-06T10:00:00.000000Z',
+                'starts_at' => '2030-06-06T10:00:00.000000Z',
             ]);
     }
 
@@ -496,10 +532,20 @@ class Phase2DSessionWorkflowTest extends TestCase
             'course_id' => $course->id,
             'created_by' => $doctor->id,
             'method' => 'face',
-            'starts_at' => '2026-05-31T10:00:00Z',
-            'ends_at' => '2026-05-31T11:30:00Z',
+            'starts_at' => $this->futureStart(),
+            'ends_at' => $this->futureEnd(),
             'status' => 'open',
         ], $attributes));
+    }
+
+    private function futureStart(): string
+    {
+        return now()->addDay()->setTime(10, 0)->toIso8601String();
+    }
+
+    private function futureEnd(): string
+    {
+        return now()->addDay()->setTime(11, 30)->toIso8601String();
     }
 
     private function otherDoctorSession(array $sessionAttributes = []): array

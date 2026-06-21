@@ -39,12 +39,13 @@ class AttendanceSessionController extends Controller
         $request->validate([
             'course_id' => 'required|exists:courses,id',
             'method' => 'required|in:face,qr,both',
-            'starts_at' => 'required|date',
+            'starts_at' => 'bail|required|date|after_or_equal:now',
             'ends_at' => 'required|date|after:starts_at',
             'session_group_key' => 'sometimes|nullable|string|max:255',
         ], [
             'starts_at.required' => 'Please enter a valid session date and time.',
             'starts_at.date' => 'Please enter a valid session date and time.',
+            'starts_at.after_or_equal' => 'Please choose a valid future session date and time.',
             'ends_at.required' => 'Please enter a valid session date and time.',
             'ends_at.date' => 'Please enter a valid session date and time.',
             'ends_at.after' => 'Please enter a valid session date and time.',
@@ -102,10 +103,11 @@ class AttendanceSessionController extends Controller
 
         $request->validate([
             'method' => 'sometimes|required|in:face,qr,both',
-            'starts_at' => 'sometimes|nullable|date',
+            'starts_at' => 'bail|sometimes|required|date|after_or_equal:now',
             'ends_at' => 'sometimes|nullable|date|after:starts_at',
         ], [
             'starts_at.date' => 'Please enter a valid session date and time.',
+            'starts_at.after_or_equal' => 'Please choose a valid future session date and time.',
             'ends_at.date' => 'Please enter a valid session date and time.',
             'ends_at.after' => 'Please enter a valid session date and time.',
         ]);
