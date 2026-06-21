@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\AuthorizesDoctorResources;
+use App\Http\Controllers\Concerns\HandlesGroupedSessions;
 use Illuminate\Http\Request;
 use App\Models\AttendanceRecord;
 use App\Models\AttendanceSession;
@@ -15,15 +16,16 @@ use App\Exports\SessionReportExport;
 class ReportController extends Controller
 {
     use AuthorizesDoctorResources;
+    use HandlesGroupedSessions;
 
     public function overview(Request $request)
     {
-        $courses = Course::with('sessions')
+        $courses = Course::with(['enrollments', 'sessions.records'])
             ->where('doctor_id', $request->user()->id)
             ->get();
 
         $courseIds = $courses->pluck('id');
-        $sessions = AttendanceSession::with('course')
+        $sessions = AttendanceSession::with('course.enrollments')
             ->whereIn('course_id', $courseIds)
             ->latest()
             ->get();
@@ -32,63 +34,73 @@ class ReportController extends Controller
             ->distinct('user_id')
             ->count('user_id');
 
-        $courseSummaries = $courses->map(function (Course $course) {
-            $sessionIds = $course->sessions->pluck('id');
-            $sessionsCount = $sessionIds->count();
-            $totalStudents = $course->enrollments()->count();
-            $possibleAttendances = $sessionsCount * $totalStudents;
-            $presentCount = $possibleAttendances > 0
-                ? AttendanceRecord::whereIn('attendance_session_id', $sessionIds)
-                    ->where('status', 'present')
-                    ->count()
-                : 0;
+        $courseSummaries = $courses
+            ->groupBy(fn (Course $course) => $this->logicalCourseKey($course))
+            ->map(function ($group) use ($sessions) {
+                /** @var Course $course */
+                $course = $group->sortBy('id')->first();
+                $courseIds = $group->pluck('id');
+                $courseSessions = $sessions->whereIn('course_id', $courseIds);
+                $sessionGroups = $this->logicalSessionGroups($courseSessions);
+                $sessionsCount = $sessionGroups->count();
+                $totalStudents = Enrollment::whereIn('course_id', $courseIds)
+                    ->distinct('user_id')
+                    ->count('user_id');
 
-            return [
-                'id' => $course->id,
-                'name' => $course->name,
-                'code' => $course->code,
-                'total_students' => $totalStudents,
-                'sessions_count' => $sessionsCount,
-                'attendance_rate' => $possibleAttendances > 0 ? round(($presentCount / $possibleAttendances) * 100, 2) : 0,
-            ];
-        })->values();
+                $possibleAttendances = $sessionGroups->sum(function ($sessionGroup) {
+                    $groupCourseIds = $sessionGroup->pluck('course_id');
+
+                    return Enrollment::whereIn('course_id', $groupCourseIds)
+                        ->distinct('user_id')
+                        ->count('user_id');
+                });
+                $presentCount = $sessionGroups->sum(function ($sessionGroup) {
+                    return AttendanceRecord::whereIn('attendance_session_id', $sessionGroup->pluck('id'))
+                        ->where('status', 'present')
+                        ->count();
+                });
+
+                return [
+                    'id' => $course->id,
+                    'name' => $course->name,
+                    'code' => $this->displayCourseCode($course->code),
+                    'total_students' => $totalStudents,
+                    'sessions_count' => $sessionsCount,
+                    'attendance_rate' => $possibleAttendances > 0 ? round(($presentCount / $possibleAttendances) * 100, 2) : 0,
+                ];
+            })
+            ->values();
 
         $averageAttendanceRate = $courseSummaries->count() > 0
             ? round($courseSummaries->avg('attendance_rate'), 2)
             : 0;
 
-        $sessionSummaries = $sessions->map(function (AttendanceSession $session) {
-            $totalCount = $session->course ? $session->course->enrollments()->count() : 0;
-            $presentCount = $session->records()->where('status', 'present')->count();
-
-            return [
-                'id' => $session->id,
-                'course_id' => $session->course_id,
-                'course_name' => $session->course?->name,
-                'course_code' => $session->course?->code,
-                'method' => $session->method,
-                'status' => $session->status,
-                'starts_at' => $session->scheduleStartsAt(),
-                'ends_at' => $session->scheduleEndsAt(),
-                'display_date' => $session->scheduleDate(),
-                'display_start_time' => $session->scheduleStartTime(),
-                'display_end_time' => $session->scheduleEndTime(),
-                'present_count' => $presentCount,
-                'total_count' => $totalCount,
-            ];
-        })->values();
+        $sessionSummaries = $this->logicalSessionGroups($sessions)
+            ->map(fn ($group) => $this->groupedSessionPayload($group))
+            ->sortByDesc('id')
+            ->values();
 
         return response()->json([
             'totals' => [
                 'average_attendance_rate' => $averageAttendanceRate,
-                'courses_count' => $courses->count(),
-                'sessions_count' => $sessions->count(),
+                'courses_count' => $courseSummaries->count(),
+                'sessions_count' => $sessionSummaries->count(),
                 'students_count' => $studentsCount,
             ],
             'trend' => [],
             'courses' => $courseSummaries,
             'sessions' => $sessionSummaries,
         ]);
+    }
+
+    private function logicalCourseKey(Course $course): string
+    {
+        return strtolower(trim($course->name)) . '::' . strtolower($this->displayCourseCode($course->code));
+    }
+
+    private function logicalSessionGroups($sessions)
+    {
+        return $sessions->groupBy(fn (AttendanceSession $session) => $session->session_group_key ?: 'session:' . $session->id);
     }
 
     public function courseReport(Request $request, $id)
