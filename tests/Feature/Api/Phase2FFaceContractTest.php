@@ -5,6 +5,7 @@ namespace Tests\Feature\Api;
 use App\Models\AttendanceSession;
 use App\Models\Course;
 use App\Models\User;
+use App\Services\FacePlusPlusService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Laravel\Sanctum\Sanctum;
@@ -49,6 +50,68 @@ class Phase2FFaceContractTest extends TestCase
             ]);
     }
 
+    public function test_face_register_continues_when_duplicate_check_hits_provider_concurrency_limit(): void
+    {
+        $this->enableFacePlusPlusConfig();
+
+        User::factory()->create([
+            'role' => 'student',
+            'face_token' => 'old-provider-token',
+        ]);
+
+        $student = User::factory()->create([
+            'role' => 'student',
+            'face_token' => null,
+        ]);
+
+        $this->app->instance(FacePlusPlusService::class, new class extends FacePlusPlusService {
+            public function __construct()
+            {
+            }
+
+            public function detectDetailed($imagePath, ?string $filename = null, ?string $mimeType = null): array
+            {
+                return [
+                    'ok' => true,
+                    'endpoint' => '/facepp/v3/detect',
+                    'status' => 200,
+                    'json' => [
+                        'faces' => [
+                            ['face_token' => 'new-face-token'],
+                        ],
+                    ],
+                    'error_code' => null,
+                    'error_message' => null,
+                ];
+            }
+
+            public function compareFaceTokenDetailed($imagePath, $faceToken, ?string $filename = null, ?string $mimeType = null): array
+            {
+                return [
+                    'ok' => false,
+                    'endpoint' => '/facepp/v3/compare',
+                    'status' => 403,
+                    'json' => null,
+                    'error_code' => 'CONCURRENCY_LIMIT_EXCEEDED',
+                    'error_message' => 'CONCURRENCY_LIMIT_EXCEEDED',
+                ];
+            }
+        });
+
+        Sanctum::actingAs($student);
+
+        $response = $this->post('/api/face/register', [
+            'image' => UploadedFile::fake()->image('face.jpg'),
+        ]);
+
+        $response->assertOk()
+            ->assertJson([
+                'message' => 'Face registered successfully',
+            ]);
+
+        $this->assertSame('new-face-token', $student->fresh()->face_token);
+    }
+
     private function disableFacePlusPlusConfig(): void
     {
         putenv('FACEPP_API_KEY=');
@@ -60,6 +123,19 @@ class Phase2FFaceContractTest extends TestCase
         $_SERVER['FACEPP_API_KEY'] = '';
         $_SERVER['FACEPP_API_SECRET'] = '';
         $_SERVER['FACEPP_BASE_URL'] = '';
+    }
+
+    private function enableFacePlusPlusConfig(): void
+    {
+        putenv('FACEPP_API_KEY=test-key');
+        putenv('FACEPP_API_SECRET=test-secret');
+        putenv('FACEPP_BASE_URL=https://example.test');
+        $_ENV['FACEPP_API_KEY'] = 'test-key';
+        $_ENV['FACEPP_API_SECRET'] = 'test-secret';
+        $_ENV['FACEPP_BASE_URL'] = 'https://example.test';
+        $_SERVER['FACEPP_API_KEY'] = 'test-key';
+        $_SERVER['FACEPP_API_SECRET'] = 'test-secret';
+        $_SERVER['FACEPP_BASE_URL'] = 'https://example.test';
     }
 
     private function doctor(array $attributes = []): User

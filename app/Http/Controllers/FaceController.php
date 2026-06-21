@@ -77,7 +77,7 @@ class FaceController extends Controller
         Log::warning('Face provider unavailable', $this->safeProviderDiagnostic($result));
 
         $payload = [
-            'message' => 'Face verification service is unavailable',
+            'message' => $this->faceProviderMessage($result),
         ];
 
         if (app()->isLocal() || config('app.debug')) {
@@ -87,6 +87,22 @@ class FaceController extends Controller
         return response()->json($payload, 503);
     }
 
+    private function faceProviderMessage(array $result): string
+    {
+        $errorCode = strtoupper((string) ($result['error_code'] ?? ''));
+        $errorMessage = strtoupper((string) ($result['error_message'] ?? ''));
+
+        if (str_contains($errorCode, 'CONCURRENCY_LIMIT_EXCEEDED') || str_contains($errorMessage, 'CONCURRENCY_LIMIT_EXCEEDED')) {
+            return 'Face verification service is busy. Please try again in a few seconds.';
+        }
+
+        if (str_contains($errorCode, 'IMAGE_ERROR') || str_contains($errorMessage, 'IMAGE_ERROR')) {
+            return 'Face image could not be processed. Please use a clear face photo.';
+        }
+
+        return 'Face verification service is unavailable';
+    }
+
     private function faceResultHasInvalidToken(array $result): bool
     {
         $errorCode = strtoupper((string) ($result['error_code'] ?? ''));
@@ -94,6 +110,20 @@ class FaceController extends Controller
 
         return str_contains($errorCode, 'INVALID_FACE_TOKEN')
             || str_contains($errorMessage, 'INVALID_FACE_TOKEN');
+    }
+
+    private function faceResultIsTransient(array $result): bool
+    {
+        $errorCode = strtoupper((string) ($result['error_code'] ?? ''));
+        $errorMessage = strtoupper((string) ($result['error_message'] ?? ''));
+        $status = (int) ($result['status'] ?? 0);
+
+        return $status >= 500
+            || str_contains($errorCode, 'CONCURRENCY_LIMIT_EXCEEDED')
+            || str_contains($errorMessage, 'CONCURRENCY_LIMIT_EXCEEDED')
+            || str_contains($errorCode, 'RATE_LIMIT')
+            || str_contains($errorMessage, 'RATE_LIMIT')
+            || str_contains($errorCode, 'HTTP_EXCEPTION');
     }
 
     private function clearInvalidFaceToken(User $student, string $context): void
@@ -237,6 +267,13 @@ class FaceController extends Controller
             if (!$compareResult['ok']) {
                 if ($this->faceResultHasInvalidToken($compareResult)) {
                     $this->clearInvalidFaceToken($student, 'face_register_duplicate_check');
+                    continue;
+                }
+
+                if ($this->faceResultIsTransient($compareResult)) {
+                    Log::warning('Skipping duplicate face check because provider is temporarily unavailable', array_merge([
+                        'student_id' => $student->id,
+                    ], $this->safeProviderDiagnostic($compareResult)));
                     continue;
                 }
 
